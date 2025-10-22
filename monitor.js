@@ -1,14 +1,12 @@
-// index.js for Appwrite Function (Final Version)
+// index.js for Appwrite Function (Final, Corrected Version)
 
 const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const { ethers } = require('ethers');
 
-// Appwrite Function的入口函数 - 使用新的 context 签名
-module.exports = async (context) => {
-    const { res, log, error } = context;
-
+// Appwrite Function的入口函数 - 移除了对 res 的所有使用
+module.exports = async ({ log, error }) => {
     // =========================================================================
     // --- 环境变量配置 (在Appwrite Function设置中配置) ---
     // =========================================================================
@@ -21,7 +19,6 @@ module.exports = async (context) => {
     // =========================================================================
 
     // --- 初始化Appwrite客户端 ---
-    // Appwrite会自动注入这些环境变量，无需手动设置
     const client = new Client()
         .setEndpoint(process.env.APPWRITE_ENDPOINT)
         .setProject(process.env.APPWRITE_PROJECT_ID)
@@ -31,7 +28,7 @@ module.exports = async (context) => {
 
     // --- 核心逻辑 ---
     try {
-        // 1. 验证并转换地址为校验和格式 (解决422错误)
+        // 1. 验证并转换地址为校验和格式
         const checksumAddress = ethers.getAddress(TARGET_ADDRESS);
         log(`Monitoring checksum address: ${checksumAddress}`);
 
@@ -39,9 +36,6 @@ module.exports = async (context) => {
         let previousPositions = {};
         let documentId = null;
 
-        // 在集合中为每个监控地址创建一个唯一的文档ID
-        // 我们可以使用地址本身作为文档ID，但需要处理'0x'前缀和长度限制
-        // 一个更稳健的方法是查询
         const queryResponse = await databases.listDocuments(
             APPWRITE_DATABASE_ID,
             APPWRITE_COLLECTION_ID,
@@ -51,7 +45,6 @@ module.exports = async (context) => {
         if (queryResponse.total > 0) {
             const document = queryResponse.documents[0];
             documentId = document.$id;
-            // 确保 positions_json 存在且不为空
             if (document.positions_json && document.positions_json.trim() !== '') {
                 previousPositions = JSON.parse(document.positions_json);
             }
@@ -106,7 +99,6 @@ module.exports = async (context) => {
             });
             log('Updated existing state in DB.');
         } else {
-            // 为集合添加一个 user_address 属性以供查询
             await databases.createDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, ID.unique(), {
                 user_address: checksumAddress,
                 positions_json: newPositionsJson
@@ -114,15 +106,16 @@ module.exports = async (context) => {
             log('Created new state record in DB.');
         }
 
-        return res.json({ success: true, message: 'Check complete.' });
+        log('Execution finished successfully.');
+        // 函数在这里隐式结束，不需要返回任何东西
 
     } catch (err) {
         error(`Execution failed: ${err.message}`);
-        return res.json({ success: false, error: err.message }, 500);
+        // 函数在这里隐式结束
     }
 };
 
-// --- 辅助函数 ---
+// --- 辅助函数 (保持不变) ---
 
 function comparePositions(previous, current, address) {
     const notifications = [];
