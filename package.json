@@ -4,7 +4,7 @@
   "description": "Monitors Hyperliquid positions and sends notifications.",
   "main": "index.js",
   "dependencies": {
-    "node-appwrite": "^11.0.0",
+    "node-appwrite": "^11.1.0",
     "axios": "^1.6.0",
     "nodemailer": "^6.9.7",
     "ethers": "^6.8.0"
