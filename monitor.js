@@ -1,12 +1,14 @@
-// index.js for Appwrite Function (Final, Corrected Version)
+// index.js for Appwrite Function (Final, Corrected Version following Appwrite Docs)
 
 const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const { ethers } = require('ethers');
 
-// Appwrite Function的入口函数 - 移除了对 res 的所有使用
-module.exports = async ({ log, error }) => {
+// Appwrite Function的入口函数 - 使用 context 并正确处理 res 对象
+module.exports = async (context) => {
+    const { res, log, error } = context;
+
     // =========================================================================
     // --- 环境变量配置 (在Appwrite Function设置中配置) ---
     // =========================================================================
@@ -107,11 +109,13 @@ module.exports = async ({ log, error }) => {
         }
 
         log('Execution finished successfully.');
-        // 函数在这里隐式结束，不需要返回任何东西
+        // --- FINAL FIX: Return an empty response to signal successful completion ---
+        return res.empty();
 
     } catch (err) {
         error(`Execution failed: ${err.message}`);
-        // 函数在这里隐式结束
+        // --- FINAL FIX: Return an error response to signal failure ---
+        return res.send(`Execution failed: ${err.message}`, 500);
     }
 };
 
