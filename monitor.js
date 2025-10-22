@@ -1,27 +1,27 @@
-// index.js for Appwrite Function
+// index.js for Appwrite Function (Final Version)
 
 const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const { ethers } = require('ethers');
 
-// Appwrite Function的入口函数
-module.exports = async ({ req, res, log, error }) => {
+// Appwrite Function的入口函数 - 使用新的 context 签名
+module.exports = async (context) => {
+    const { res, log, error } = context;
+
     // =========================================================================
     // --- 环境变量配置 (在Appwrite Function设置中配置) ---
     // =========================================================================
-    // 1. 您想要监控的Hyperliquid地址
     const TARGET_ADDRESS = process.env.TARGET_ADDRESS;
-    // 2. Gmail配置
     const SENDER_EMAIL = process.env.SENDER_EMAIL;
     const APP_PASSWORD = process.env.APP_PASSWORD;
     const RECEIVER_EMAIL = process.env.RECEIVER_EMAIL;
-    // 3. Appwrite配置
     const APPWRITE_DATABASE_ID = process.env.APPWRITE_DATABASE_ID;
     const APPWRITE_COLLECTION_ID = process.env.APPWRITE_COLLECTION_ID;
     // =========================================================================
 
     // --- 初始化Appwrite客户端 ---
+    // Appwrite会自动注入这些环境变量，无需手动设置
     const client = new Client()
         .setEndpoint(process.env.APPWRITE_ENDPOINT)
         .setProject(process.env.APPWRITE_PROJECT_ID)
@@ -39,6 +39,9 @@ module.exports = async ({ req, res, log, error }) => {
         let previousPositions = {};
         let documentId = null;
 
+        // 在集合中为每个监控地址创建一个唯一的文档ID
+        // 我们可以使用地址本身作为文档ID，但需要处理'0x'前缀和长度限制
+        // 一个更稳健的方法是查询
         const queryResponse = await databases.listDocuments(
             APPWRITE_DATABASE_ID,
             APPWRITE_COLLECTION_ID,
@@ -48,7 +51,10 @@ module.exports = async ({ req, res, log, error }) => {
         if (queryResponse.total > 0) {
             const document = queryResponse.documents[0];
             documentId = document.$id;
-            previousPositions = JSON.parse(document.positions_json || '{}');
+            // 确保 positions_json 存在且不为空
+            if (document.positions_json && document.positions_json.trim() !== '') {
+                previousPositions = JSON.parse(document.positions_json);
+            }
             log('Successfully fetched previous state from DB.');
         } else {
             log('No previous state found for this address. Will create a new record.');
@@ -86,7 +92,7 @@ module.exports = async ({ req, res, log, error }) => {
                 auth: { user: SENDER_EMAIL, pass: APP_PASSWORD.replace(/\s/g, '') }
             });
             for (const notification of notifications) {
-                await sendEmailNotification(transporter, notification.subject, notification.htmlBody, SENDER_EMAIL, RECEIVER_EMAIL);
+                await sendEmailNotification(transporter, notification.subject, notification.htmlBody, SENDER_EMAIL, RECEIVER_EMAIL, log, error);
             }
         } else {
             log('No position changes detected.');
@@ -95,13 +101,12 @@ module.exports = async ({ req, res, log, error }) => {
         // 5. 将当前状态保存回Appwrite DB
         const newPositionsJson = JSON.stringify(currentPositions);
         if (documentId) {
-            // 更新现有记录
             await databases.updateDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, documentId, {
                 positions_json: newPositionsJson
             });
             log('Updated existing state in DB.');
         } else {
-            // 创建新记录
+            // 为集合添加一个 user_address 属性以供查询
             await databases.createDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, ID.unique(), {
                 user_address: checksumAddress,
                 positions_json: newPositionsJson
@@ -183,7 +188,7 @@ function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos 
     return { subject, htmlBody };
 }
 
-async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver) {
+async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver, log, error) {
     const mailOptions = {
         from: `"Hyperliquid Monitor" <${sender}>`,
         to: receiver,
@@ -192,8 +197,8 @@ async function sendEmailNotification(transporter, subject, htmlBody, sender, rec
     };
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`Email notification sent: ${subject}`);
+        log(`Email notification sent: ${subject}`);
     } catch (err) {
-        console.error(`Error sending email: ${err.message}`);
+        error(`Error sending email: ${err.message}`);
     }
 }
