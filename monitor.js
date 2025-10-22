@@ -1,96 +1,16 @@
-// index.js for Appwrite Function (Final, Corrected Version)
+// index.js for Appwrite Function (Final Version with SDK Bug Workaround)
 
 const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
-const { ethers } = require('ethers'); // 确保 ethers 被引入
+const { ethers } = require('ethers');
 
 // ============================================================================
-// --- 辅助函数 ---
-// (这些函数保持不变，位于主函数外部)
+// --- 辅助函数 (No changes needed here) ---
 // ============================================================================
-
-function comparePositions(previous, current, address) {
-    const notifications = [];
-    const allCoins = new Set([...Object.keys(previous), ...Object.keys(current)]);
-
-    allCoins.forEach(coin => {
-        const prev = previous[coin];
-        const curr = current[coin];
-        let notificationData = null;
-
-        if (!prev && curr) {
-            notificationData = formatEmailMessage('🚀 New Position Opened', coin, curr, address);
-        } else if (prev && !curr) {
-            notificationData = formatEmailMessage('✅ Position Closed', coin, prev, address, true);
-        } else if (prev && curr && prev.szi !== curr.szi) {
-            if (Math.abs(curr.szi) > Math.abs(prev.szi)) {
-                notificationData = formatEmailMessage('➕ Position Increased', coin, curr, address, false, prev);
-            } else {
-                notificationData = formatEmailMessage('➖ Position Decreased', coin, curr, address, false, prev);
-            }
-        }
-        if (notificationData) {
-            notifications.push(notificationData);
-        }
-    });
-    return notifications;
-}
-
-function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos = null) {
-    const positionType = pos.szi > 0 ? 'LONG' : 'SHORT';
-    const size = Math.abs(pos.szi).toFixed(4);
-    const subject = `Hyperliquid Alert: ${title} - ${coin}`;
-
-    let changeText = '';
-    if (prevPos) {
-        const prevSize = Math.abs(prevPos.szi).toFixed(4);
-        const change = (Math.abs(pos.szi) - Math.abs(prevPos.szi)).toFixed(4);
-        changeText = `
-            <li><strong>Previous Size:</strong> ${prevSize} ${coin}</li>
-            <li><strong>Change:</strong> ${change} ${coin}</li>
-        `;
-    }
-    
-    // 确保 liquidationPx 存在，如果不存在则显示 N/A
-    const liquidationPrice = pos.liquidationPx ? `$${pos.liquidationPx}` : 'N/A';
-
-    const htmlBody = `
-        <div style="font-family: sans-serif; line-height: 1.6;">
-            <h2 style="color: #333;">${subject}</h2>
-            <p>A position change was detected for address: <strong>${address}</strong></p>
-            <hr>
-            <ul style="list-style-type: none; padding: 0;">
-                <li><strong>Action:</strong> ${title}</li>
-                <li><strong>Asset:</strong> ${coin}</li>
-                <li><strong>Direction:</strong> ${positionType}</li>
-                <li><strong>Current Size:</strong> ${size} ${coin}</li>
-                ${changeText}
-                <li><strong>Entry Price:</strong> $${pos.entryPx}</li>
-                <li><strong>Liquidation Price:</strong> ${liquidationPrice}</li>
-                <li><strong>Margin Used:</strong> $${pos.marginUsed.toFixed(2)}</li>
-            </ul>
-            <hr>
-            <p style="font-size: 12px; color: #888;">This is an automated notification from your Appwrite Function.</p>
-        </div>
-    `;
-    return { subject, htmlBody };
-}
-
-async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver, log, error) {
-    const mailOptions = {
-        from: `"Hyperliquid Monitor" <${sender}>`,
-        to: receiver,
-        subject: subject,
-        html: htmlBody
-    };
-    try {
-        await transporter.sendMail(mailOptions);
-        log(`Email notification sent: ${subject}`);
-    } catch (err) {
-        error(`Error sending email: ${err.message}`);
-    }
-}
+function comparePositions(previous, current, address) { /* ... same as before ... */ }
+function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos = null) { /* ... same as before ... */ }
+async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver, log, error) { /* ... same as before ... */ }
 
 // ============================================================================
 // --- Appwrite Function Entrypoint ---
@@ -98,7 +18,7 @@ async function sendEmailNotification(transporter, subject, htmlBody, sender, rec
 module.exports = async (context) => {
     const { res, log, error } = context;
 
-    // --- 1. 从环境变量加载配置 ---
+    // --- 1. Load Environment Variables ---
     const TARGET_ADDRESS = process.env.TARGET_ADDRESS;
     const SENDER_EMAIL = process.env.SENDER_EMAIL;
     const APP_PASSWORD = process.env.APP_PASSWORD;
@@ -109,7 +29,7 @@ module.exports = async (context) => {
     const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
     const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY;
 
-    // --- 2. 初始化Appwrite客户端 ---
+    // --- 2. Initialize Appwrite Client ---
     const client = new Client()
         .setEndpoint(APPWRITE_ENDPOINT)
         .setProject(APPWRITE_PROJECT_ID)
@@ -117,7 +37,7 @@ module.exports = async (context) => {
     
     const databases = new Databases(client);
 
-    // --- 3. 核心逻辑 ---
+    // --- 3. Core Logic ---
     try {
         if (!TARGET_ADDRESS) {
             throw new Error("Environment variable TARGET_ADDRESS is not set.");
@@ -129,22 +49,29 @@ module.exports = async (context) => {
         let previousPositions = {};
         let documentId = null;
 
-        const queryResponse = await databases.listDocuments(
+        // ========================================================================
+        // [BUGFIX] Avoid using the 'queries' parameter to prevent the SDK bug.
+        // Fetch all documents and filter them in the function's code instead.
+        // ========================================================================
+        const allDocumentsResponse = await databases.listDocuments(
             APPWRITE_DATABASE_ID,
-            APPWRITE_COLLECTION_ID,
-            [Query.equal('user_address', checksumAddress)]
+            APPWRITE_COLLECTION_ID
         );
 
-        if (queryResponse.total > 0) {
-            const document = queryResponse.documents[0];
+        const document = allDocumentsResponse.documents.find(doc => doc.user_address === checksumAddress);
+
+        if (document) {
             documentId = document.$id;
             if (document.positions_json && document.positions_json.trim() !== '') {
                 previousPositions = JSON.parse(document.positions_json);
             }
-            log('Successfully fetched previous state from DB.');
+            log('Successfully found and fetched previous state from DB.');
         } else {
             log('No previous state found for this address. Will create a new record.');
         }
+        // ========================================================================
+        // End of Bugfix
+        // ========================================================================
 
         const apiResponse = await axios.post('https://api.hyperliquid.xyz/info', {
             type: 'userState',
@@ -200,7 +127,89 @@ module.exports = async (context) => {
         return res.empty();
 
     } catch (err) {
-        error(`Execution failed: ${err.stack}`); // 使用 err.stack 获取更详细的错误信息
+        error(`Execution failed: ${err.stack}`);
         return res.send(err.message, 500);
     }
 };
+
+// --- Helper Functions (pasted here for completeness) ---
+function comparePositions(previous, current, address) {
+    const notifications = [];
+    const allCoins = new Set([...Object.keys(previous), ...Object.keys(current)]);
+
+    allCoins.forEach(coin => {
+        const prev = previous[coin];
+        const curr = current[coin];
+        let notificationData = null;
+
+        if (!prev && curr) {
+            notificationData = formatEmailMessage('🚀 New Position Opened', coin, curr, address);
+        } else if (prev && !curr) {
+            notificationData = formatEmailMessage('✅ Position Closed', coin, prev, address, true);
+        } else if (prev && curr && prev.szi !== curr.szi) {
+            if (Math.abs(curr.szi) > Math.abs(prev.szi)) {
+                notificationData = formatEmailMessage('➕ Position Increased', coin, curr, address, false, prev);
+            } else {
+                notificationData = formatEmailMessage('➖ Position Decreased', coin, curr, address, false, prev);
+            }
+        }
+        if (notificationData) {
+            notifications.push(notificationData);
+        }
+    });
+    return notifications;
+}
+
+function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos = null) {
+    const positionType = pos.szi > 0 ? 'LONG' : 'SHORT';
+    const size = Math.abs(pos.szi).toFixed(4);
+    const subject = `Hyperliquid Alert: ${title} - ${coin}`;
+
+    let changeText = '';
+    if (prevPos) {
+        const prevSize = Math.abs(prevPos.szi).toFixed(4);
+        const change = (Math.abs(pos.szi) - Math.abs(prevPos.szi)).toFixed(4);
+        changeText = `
+            <li><strong>Previous Size:</strong> ${prevSize} ${coin}</li>
+            <li><strong>Change:</strong> ${change} ${coin}</li>
+        `;
+    }
+    
+    const liquidationPrice = pos.liquidationPx ? `$${pos.liquidationPx}` : 'N/A';
+
+    const htmlBody = `
+        <div style="font-family: sans-serif; line-height: 1.6;">
+            <h2 style="color: #333;">${subject}</h2>
+            <p>A position change was detected for address: <strong>${address}</strong></p>
+            <hr>
+            <ul style="list-style-type: none; padding: 0;">
+                <li><strong>Action:</strong> ${title}</li>
+                <li><strong>Asset:</strong> ${coin}</li>
+                <li><strong>Direction:</strong> ${positionType}</li>
+                <li><strong>Current Size:</strong> ${size} ${coin}</li>
+                ${changeText}
+                <li><strong>Entry Price:</strong> $${pos.entryPx}</li>
+                <li><strong>Liquidation Price:</strong> ${liquidationPrice}</li>
+                <li><strong>Margin Used:</strong> $${pos.marginUsed.toFixed(2)}</li>
+            </ul>
+            <hr>
+            <p style="font-size: 12px; color: #888;">This is an automated notification from your Appwrite Function.</p>
+        </div>
+    `;
+    return { subject, htmlBody };
+}
+
+async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver, log, error) {
+    const mailOptions = {
+        from: `"Hyperliquid Monitor" <${sender}>`,
+        to: receiver,
+        subject: subject,
+        html: htmlBody
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+        log(`Email notification sent: ${subject}`);
+    } catch (err) {
+        error(`Error sending email: ${err.message}`);
+    }
+}
