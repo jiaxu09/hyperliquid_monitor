@@ -18,7 +18,7 @@ async function sendEmailNotification(transporter, subject, htmlBody, sender, rec
 module.exports = async (context) => {
     const { res, log, error } = context;
 
-    // --- 1. Load Environment Variables ---
+    // --- 1. 硬编码所有配置，就像能工作的 ob-finder.js 一样 ---
     const TARGET_ADDRESS = '0xb317D2BC2D3d2Df5Fa441B5bAE0AB9d8b07283ae';
     const SENDER_EMAIL = 'jiaxu99.w@gmail.com';
     const APP_PASSWORD = 'hqmv qwbm qpik juiq';
@@ -29,7 +29,8 @@ module.exports = async (context) => {
     const APPWRITE_PROJECT_ID = '68f83a530002fd707c12';
     const APPWRITE_API_KEY = 'standard_7ed5da113991e48205f5b2b34825efc512795358d933080c96a22b5980a23ded1e49f7bb868cc0c68e1e74294213a99162e5fe1c55520c02741b52a2b67d48838fd33135566177ce3652daac8bfb1c01286c4f26d8e5daeab888b2cd050daa7313461b3b0974cc999a8dcca03aaddbfe1e35d784f81be0699fe6b9082690fa02';
 
-    // --- 2. Initialize Appwrite Client ---
+
+    // --- 2. 初始化Appwrite客户端 ---
     const client = new Client()
         .setEndpoint(APPWRITE_ENDPOINT)
         .setProject(APPWRITE_PROJECT_ID)
@@ -37,12 +38,8 @@ module.exports = async (context) => {
     
     const databases = new Databases(client);
 
-    // --- 3. Core Logic ---
+    // --- 3. 核心逻辑 ---
     try {
-        if (!TARGET_ADDRESS) {
-            throw new Error("Environment variable TARGET_ADDRESS is not set.");
-        }
-
         const checksumAddress = ethers.getAddress(TARGET_ADDRESS);
         log(`Monitoring checksum address: ${checksumAddress}`);
 
@@ -50,12 +47,13 @@ module.exports = async (context) => {
         let documentId = null;
 
         // ========================================================================
-        // [BUGFIX] Avoid using the 'queries' parameter to prevent the SDK bug.
-        // Fetch all documents and filter them in the function's code instead.
+        // [FINAL BUGFIX] 移除 Query.equal()，改为手动过滤，
+        // 模仿 ob-finder.js 的成功模式，绕过 SDK bug。
         // ========================================================================
         const allDocumentsResponse = await databases.listDocuments(
             APPWRITE_DATABASE_ID,
-            APPWRITE_COLLECTION_ID
+            APPWRITE_COLLECTION_ID,
+            [Query.limit(5000)] // 使用一个不会触发 bug 的简单查询
         );
 
         const document = allDocumentsResponse.documents.find(doc => doc.user_address === checksumAddress);
@@ -124,7 +122,7 @@ module.exports = async (context) => {
         }
 
         log('Execution finished successfully.');
-        return res.empty();
+        return res.json({ success: true }); // 使用和 ob-finder 一样的返回方式
 
     } catch (err) {
         error(`Execution failed: ${err.stack}`);
