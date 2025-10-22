@@ -52,8 +52,7 @@ module.exports = async (context) => {
         // ========================================================================
         const allDocumentsResponse = await databases.listDocuments(
             APPWRITE_DATABASE_ID,
-            APPWRITE_COLLECTION_ID,
-            [Query.limit(5000)] // 使用一个不会触发 bug 的简单查询
+            APPWRITE_COLLECTION_ID
         );
 
         const document = allDocumentsResponse.documents.find(doc => doc.user_address === checksumAddress);
