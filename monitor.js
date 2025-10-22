@@ -1,4 +1,4 @@
-import { Client, Databases } from 'node-appwrite';
+import { Client, Databases, Query } from 'node-appwrite';
 import nodemailer from 'nodemailer';
 
 export default async ({ req, res, log, error }) => {
@@ -15,11 +15,20 @@ export default async ({ req, res, log, error }) => {
     const COLLECTION_ID = process.env.APPWRITE_COLLECTION_ID;
 
     // 验证必要参数
-    if (!HYPERLIQUID_ADDRESS || !GMAIL_USER || !GMAIL_APP_PASSWORD || !NOTIFY_EMAIL) {
-      throw new Error('Missing required environment variables');
+    if (!HYPERLIQUID_ADDRESS) {
+      throw new Error('HYPERLIQUID_ADDRESS is required');
+    }
+    if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
+      throw new Error('Gmail credentials are required');
+    }
+    if (!NOTIFY_EMAIL) {
+      throw new Error('NOTIFY_EMAIL is required');
+    }
+    if (!APPWRITE_PROJECT_ID || !APPWRITE_API_KEY || !DATABASE_ID || !COLLECTION_ID) {
+      throw new Error('Appwrite configuration is required');
     }
 
-    log('Starting position monitoring...');
+    log('Starting position monitoring for address:', HYPERLIQUID_ADDRESS);
 
     // 获取当前仓位
     const currentPositions = await getHyperliquidPositions(HYPERLIQUID_ADDRESS);
@@ -32,6 +41,7 @@ export default async ({ req, res, log, error }) => {
       APPWRITE_API_KEY,
       DATABASE_ID,
       COLLECTION_ID,
+      HYPERLIQUID_ADDRESS,
       log
     );
     log('Previous positions:', JSON.stringify(previousPositions));
@@ -59,6 +69,7 @@ export default async ({ req, res, log, error }) => {
         APPWRITE_API_KEY,
         DATABASE_ID,
         COLLECTION_ID,
+        HYPERLIQUID_ADDRESS,
         currentPositions,
         log
       );
@@ -66,7 +77,8 @@ export default async ({ req, res, log, error }) => {
       return res.json({
         success: true,
         message: `检测到 ${changes.length} 个仓位变化`,
-        changes: changes
+        changes: changes,
+        address: HYPERLIQUID_ADDRESS
       });
     } else {
       log('No position changes detected');
@@ -78,13 +90,15 @@ export default async ({ req, res, log, error }) => {
         APPWRITE_API_KEY,
         DATABASE_ID,
         COLLECTION_ID,
+        HYPERLIQUID_ADDRESS,
         currentPositions,
         log
       );
       
       return res.json({
         success: true,
-        message: '未检测到仓位变化'
+        message: '未检测到仓位变化',
+        address: HYPERLIQUID_ADDRESS
       });
     }
 
@@ -93,7 +107,8 @@ export default async ({ req, res, log, error }) => {
     error('Stack:', err.stack);
     return res.json({
       success: false,
-      error: err.message
+      error: err.message,
+      stack: err.stack
     }, 500);
   }
 };
@@ -114,7 +129,7 @@ async function getHyperliquidPositions(address) {
   });
 
   if (!response.ok) {
-    throw new Error(`Hyperliquid API 错误: ${response.status}`);
+    throw new Error(`Hyperliquid API 错误: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
@@ -156,6 +171,7 @@ function detectPositionChanges(previousPositions, currentPositions) {
         entryPrice: position.entryPrice,
         leverage: position.leverage,
         unrealizedPnl: position.unrealizedPnl,
+        liquidationPrice: position.liquidationPrice,
         timestamp: new Date().toISOString()
       });
     } else {
@@ -171,6 +187,7 @@ function detectPositionChanges(previousPositions, currentPositions) {
           entryPrice: position.entryPrice,
           leverage: position.leverage,
           unrealizedPnl: position.unrealizedPnl,
+          liquidationPrice: position.liquidationPrice,
           timestamp: new Date().toISOString()
         });
       } else if (sizeDiff < -0.0001) {
@@ -183,6 +200,7 @@ function detectPositionChanges(previousPositions, currentPositions) {
           sizeChange: position.size - prevPos[coin].size,
           entryPrice: position.entryPrice,
           unrealizedPnl: position.unrealizedPnl,
+          liquidationPrice: position.liquidationPrice,
           timestamp: new Date().toISOString()
         });
       }
@@ -220,12 +238,12 @@ async function sendEmailNotification(gmailUser, gmailPassword, recipientEmail, a
     let emailBody = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #333;">🚨 Hyperliquid 仓位变化通知</h2>
-        <p><strong>监控地址:</strong> <code>${address}</code></p>
+        <p><strong>监控地址:</strong> <code style="background: #f4f4f4; padding: 2px 6px; border-radius: 3px;">${address}</code></p>
         <p><strong>时间:</strong> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</p>
         <hr style="border: 1px solid #ddd;">
     `;
 
-    changes.forEach((change, index) => {
+    changes.forEach((change) => {
       emailBody += `<div style="margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid `;
       
       switch (change.type) {
@@ -233,9 +251,10 @@ async function sendEmailNotification(gmailUser, gmailPassword, recipientEmail, a
           emailBody += `#4CAF50;">
             <h3 style="color: #4CAF50; margin-top: 0;">🟢 新开仓位</h3>
             <p><strong>币种:</strong> ${change.coin}</p>
-            <p><strong>仓位大小:</strong> ${change.size}</p>
+            <p><strong>仓位大小:</strong> ${change.size > 0 ? '做多' : '做空'} ${Math.abs(change.size)}</p>
             <p><strong>开仓价格:</strong> $${change.entryPrice.toFixed(4)}</p>
             <p><strong>杠杆:</strong> ${change.leverage}x</p>
+            <p><strong>清算价:</strong> $${change.liquidationPrice ? change.liquidationPrice.toFixed(4) : 'N/A'}</p>
             <p><strong>未实现盈亏:</strong> <span style="color: ${change.unrealizedPnl >= 0 ? 'green' : 'red'}">$${change.unrealizedPnl.toFixed(2)}</span></p>
           `;
           break;
@@ -249,6 +268,7 @@ async function sendEmailNotification(gmailUser, gmailPassword, recipientEmail, a
             <p><strong>增加:</strong> +${Math.abs(change.sizeChange).toFixed(4)}</p>
             <p><strong>入场价:</strong> $${change.entryPrice.toFixed(4)}</p>
             <p><strong>杠杆:</strong> ${change.leverage}x</p>
+            <p><strong>清算价:</strong> $${change.liquidationPrice ? change.liquidationPrice.toFixed(4) : 'N/A'}</p>
             <p><strong>未实现盈亏:</strong> <span style="color: ${change.unrealizedPnl >= 0 ? 'green' : 'red'}">$${change.unrealizedPnl.toFixed(2)}</span></p>
           `;
           break;
@@ -261,6 +281,7 @@ async function sendEmailNotification(gmailUser, gmailPassword, recipientEmail, a
             <p><strong>当前仓位:</strong> ${change.currentSize}</p>
             <p><strong>减少:</strong> ${change.sizeChange.toFixed(4)}</p>
             <p><strong>当前价格:</strong> $${change.entryPrice.toFixed(4)}</p>
+            <p><strong>清算价:</strong> $${change.liquidationPrice ? change.liquidationPrice.toFixed(4) : 'N/A'}</p>
             <p><strong>未实现盈亏:</strong> <span style="color: ${change.unrealizedPnl >= 0 ? 'green' : 'red'}">$${change.unrealizedPnl.toFixed(2)}</span></p>
           `;
           break;
@@ -300,7 +321,7 @@ async function sendEmailNotification(gmailUser, gmailPassword, recipientEmail, a
 }
 
 // 获取之前保存的仓位
-async function getPreviousPositions(endpoint, projectId, apiKey, databaseId, collectionId, log) {
+async function getPreviousPositions(endpoint, projectId, apiKey, databaseId, collectionId, userAddress, log) {
   try {
     const client = new Client()
       .setEndpoint(endpoint)
@@ -309,19 +330,24 @@ async function getPreviousPositions(endpoint, projectId, apiKey, databaseId, col
 
     const databases = new Databases(client);
 
-    const documents = await databases.listDocuments(databaseId, collectionId);
+    // 查询特定用户地址的记录
+    const documents = await databases.listDocuments(
+      databaseId, 
+      collectionId,
+      [
+        Query.equal('user_address', userAddress),
+        Query.orderDesc('timestamp'),
+        Query.limit(1)
+      ]
+    );
     
     if (documents.documents.length > 0) {
-      // 按时间排序，获取最新的
-      const latestDoc = documents.documents.sort((a, b) => 
-        new Date(b.timestamp) - new Date(a.timestamp)
-      )[0];
-      
+      const latestDoc = documents.documents[0];
       log('Found previous positions document:', latestDoc.$id);
       return JSON.parse(latestDoc.positions_json);
     }
     
-    log('No previous positions found');
+    log('No previous positions found for address:', userAddress);
     return {};
   } catch (err) {
     log('Error getting previous positions:', err.message);
@@ -330,7 +356,7 @@ async function getPreviousPositions(endpoint, projectId, apiKey, databaseId, col
 }
 
 // 保存当前仓位
-async function saveCurrentPositions(endpoint, projectId, apiKey, databaseId, collectionId, positions, log) {
+async function saveCurrentPositions(endpoint, projectId, apiKey, databaseId, collectionId, userAddress, positions, log) {
   try {
     const client = new Client()
       .setEndpoint(endpoint)
@@ -339,11 +365,22 @@ async function saveCurrentPositions(endpoint, projectId, apiKey, databaseId, col
 
     const databases = new Databases(client);
 
-    // 删除旧记录（只保留最新的）
-    const documents = await databases.listDocuments(databaseId, collectionId);
-    for (const doc of documents.documents) {
-      await databases.deleteDocument(databaseId, collectionId, doc.$id);
-      log('Deleted old document:', doc.$id);
+    // 删除该地址的旧记录（保留最近1条即可）
+    const documents = await databases.listDocuments(
+      databaseId,
+      collectionId,
+      [
+        Query.equal('user_address', userAddress),
+        Query.orderDesc('timestamp')
+      ]
+    );
+    
+    // 只保留最新的记录，删除其他
+    if (documents.documents.length > 0) {
+      for (const doc of documents.documents) {
+        await databases.deleteDocument(databaseId, collectionId, doc.$id);
+        log('Deleted old document:', doc.$id);
+      }
     }
 
     // 创建新记录
@@ -352,6 +389,7 @@ async function saveCurrentPositions(endpoint, projectId, apiKey, databaseId, col
       collectionId,
       'unique()',
       {
+        user_address: userAddress,
         positions_json: JSON.stringify(positions),
         timestamp: new Date().toISOString()
       }
@@ -360,6 +398,7 @@ async function saveCurrentPositions(endpoint, projectId, apiKey, databaseId, col
     log('Saved new positions document:', newDoc.$id);
   } catch (err) {
     log('Error saving positions:', err.message);
+    log('Error details:', JSON.stringify(err));
     throw err;
   }
 }
