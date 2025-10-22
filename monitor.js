@@ -1,16 +1,8 @@
-// index.js for Appwrite Function (Final Version with SDK Bug Workaround)
+// index.js for Appwrite Function (Using REST API instead of SDK)
 
-const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const { ethers } = require('ethers');
-
-// ============================================================================
-// --- 辅助函数 (No changes needed here) ---
-// ============================================================================
-function comparePositions(previous, current, address) { /* ... same as before ... */ }
-function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos = null) { /* ... same as before ... */ }
-async function sendEmailNotification(transporter, subject, htmlBody, sender, receiver, log, error) { /* ... same as before ... */ }
 
 // ============================================================================
 // --- Appwrite Function Entrypoint ---
@@ -18,7 +10,7 @@ async function sendEmailNotification(transporter, subject, htmlBody, sender, rec
 module.exports = async (context) => {
     const { res, log, error } = context;
 
-    // --- 1. 硬编码所有配置，就像能工作的 ob-finder.js 一样 ---
+    // --- 1. 配置 ---
     const TARGET_ADDRESS = '0xb317D2BC2D3d2Df5Fa441B5bAE0AB9d8b07283ae';
     const SENDER_EMAIL = 'jiaxu99.w@gmail.com';
     const APP_PASSWORD = 'hqmv qwbm qpik juiq';
@@ -29,14 +21,15 @@ module.exports = async (context) => {
     const APPWRITE_PROJECT_ID = '68f83a530002fd707c12';
     const APPWRITE_API_KEY = 'standard_7ed5da113991e48205f5b2b34825efc512795358d933080c96a22b5980a23ded1e49f7bb868cc0c68e1e74294213a99162e5fe1c55520c02741b52a2b67d48838fd33135566177ce3652daac8bfb1c01286c4f26d8e5daeab888b2cd050daa7313461b3b0974cc999a8dcca03aaddbfe1e35d784f81be0699fe6b9082690fa02';
 
-
-    // --- 2. 初始化Appwrite客户端 ---
-    const client = new Client()
-        .setEndpoint(APPWRITE_ENDPOINT)
-        .setProject(APPWRITE_PROJECT_ID)
-        .setKey(APPWRITE_API_KEY);
-    
-    const databases = new Databases(client);
+    // --- 2. Axios 实例用于 Appwrite API ---
+    const appwriteClient = axios.create({
+        baseURL: APPWRITE_ENDPOINT,
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Appwrite-Project': APPWRITE_PROJECT_ID,
+            'X-Appwrite-Key': APPWRITE_API_KEY
+        }
+    });
 
     // --- 3. 核心逻辑 ---
     try {
@@ -47,29 +40,35 @@ module.exports = async (context) => {
         let documentId = null;
 
         // ========================================================================
-        // [FINAL BUGFIX] 移除 Query.equal()，改为手动过滤，
-        // 模仿 ob-finder.js 的成功模式，绕过 SDK bug。
+        // [FIX] 使用 REST API 替代 SDK
         // ========================================================================
-        const allDocumentsResponse = await databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            APPWRITE_COLLECTION_ID
-        );
+        try {
+            // 获取所有文档
+            const listResponse = await appwriteClient.get(
+                `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents`
+            );
 
-        const document = allDocumentsResponse.documents.find(doc => doc.user_address === checksumAddress);
+            // 手动查找匹配的文档
+            const document = listResponse.data.documents.find(
+                doc => doc.user_address === checksumAddress
+            );
 
-        if (document) {
-            documentId = document.$id;
-            if (document.positions_json && document.positions_json.trim() !== '') {
-                previousPositions = JSON.parse(document.positions_json);
+            if (document) {
+                documentId = document.$id;
+                if (document.positions_json && document.positions_json.trim() !== '') {
+                    previousPositions = JSON.parse(document.positions_json);
+                }
+                log('Successfully found and fetched previous state from DB.');
+            } else {
+                log('No previous state found for this address. Will create a new record.');
             }
-            log('Successfully found and fetched previous state from DB.');
-        } else {
-            log('No previous state found for this address. Will create a new record.');
+        } catch (dbError) {
+            // 如果集合为空或其他错误，继续执行
+            log(`DB fetch warning: ${dbError.message}`);
         }
         // ========================================================================
-        // End of Bugfix
-        // ========================================================================
 
+        // 获取当前状态
         const apiResponse = await axios.post('https://api.hyperliquid.xyz/info', {
             type: 'userState',
             user: checksumAddress
@@ -92,6 +91,7 @@ module.exports = async (context) => {
         }
         log('Successfully fetched current state from Hyperliquid API.');
 
+        // 比较并发送通知
         const notifications = comparePositions(previousPositions, currentPositions, checksumAddress);
         if (notifications.length > 0) {
             log(`Found ${notifications.length} position changes. Sending notifications...`);
@@ -106,22 +106,34 @@ module.exports = async (context) => {
             log('No position changes detected.');
         }
 
+        // 更新数据库
         const newPositionsJson = JSON.stringify(currentPositions);
         if (documentId) {
-            await databases.updateDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, documentId, {
-                positions_json: newPositionsJson
-            });
+            // 更新现有文档
+            await appwriteClient.patch(
+                `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents/${documentId}`,
+                {
+                    positions_json: newPositionsJson
+                }
+            );
             log('Updated existing state in DB.');
         } else {
-            await databases.createDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, ID.unique(), {
-                user_address: checksumAddress,
-                positions_json: newPositionsJson
-            });
+            // 创建新文档
+            await appwriteClient.post(
+                `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents`,
+                {
+                    documentId: 'unique()',
+                    data: {
+                        user_address: checksumAddress,
+                        positions_json: newPositionsJson
+                    }
+                }
+            );
             log('Created new state record in DB.');
         }
 
         log('Execution finished successfully.');
-        return res.json({ success: true }); // 使用和 ob-finder 一样的返回方式
+        return res.json({ success: true });
 
     } catch (err) {
         error(`Execution failed: ${err.stack}`);
@@ -129,7 +141,9 @@ module.exports = async (context) => {
     }
 };
 
-// --- Helper Functions (pasted here for completeness) ---
+// ============================================================================
+// --- 辅助函数 ---
+// ============================================================================
 function comparePositions(previous, current, address) {
     const notifications = [];
     const allCoins = new Set([...Object.keys(previous), ...Object.keys(current)]);
