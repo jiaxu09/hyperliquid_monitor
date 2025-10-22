@@ -99,15 +99,15 @@ module.exports = async (context) => {
     const { res, log, error } = context;
 
     // --- 1. 从环境变量加载配置 ---
-    const TARGET_ADDRESS = context.env.TARGET_ADDRESS;
-    const SENDER_EMAIL = context.env.SENDER_EMAIL;
-    const APP_PASSWORD = context.env.APP_PASSWORD;
-    const RECEIVER_EMAIL = context.env.RECEIVER_EMAIL;
-    const APPWRITE_DATABASE_ID = context.env.APPWRITE_DATABASE_ID;
-    const APPWRITE_COLLECTION_ID = context.env.APPWRITE_COLLECTION_ID;
-    const APPWRITE_ENDPOINT = context.env.APPWRITE_ENDPOINT;
-    const APPWRITE_PROJECT_ID = context.env.APPWRITE_PROJECT_ID;
-    const APPWRITE_API_KEY = context.env.APPWRITE_API_KEY;
+    const TARGET_ADDRESS = process.env.TARGET_ADDRESS;
+    const SENDER_EMAIL = process.env.SENDER_EMAIL;
+    const APP_PASSWORD = process.env.APP_PASSWORD;
+    const RECEIVER_EMAIL = process.env.RECEIVER_EMAIL;
+    const APPWRITE_DATABASE_ID = process.env.APPWRITE_DATABASE_ID;
+    const APPWRITE_COLLECTION_ID = process.env.APPWRITE_COLLECTION_ID;
+    const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT;
+    const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
+    const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY;
 
     // --- 2. 初始化Appwrite客户端 ---
     const client = new Client()
