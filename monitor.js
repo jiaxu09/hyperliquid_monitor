@@ -1,4 +1,4 @@
-// index.js for Appwrite Function (Fixed REST API calls)
+// index.js for Appwrite Function (Fixed JSON format)
 
 const axios = require('axios');
 const nodemailer = require('nodemailer');
@@ -107,31 +107,27 @@ module.exports = async (context) => {
         }
 
         // ========================================================================
-        // 更新数据库 - 修复的部分
+        // 更新数据库 - 完全修复的格式
         // ========================================================================
         const newPositionsJson = JSON.stringify(currentPositions);
         
         if (documentId) {
-            // 更新现有文档 - 字段直接在根级别
+            // 更新现有文档 - 直接传递字段
             await appwriteClient.patch(
                 `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents/${documentId}`,
                 {
-                    data: {
-                        positions_json: newPositionsJson
-                    }
+                    positions_json: newPositionsJson
                 }
             );
             log('Updated existing state in DB.');
         } else {
-            // 创建新文档 - 修复格式
+            // 创建新文档 - 正确的 REST API 格式
             const createResponse = await appwriteClient.post(
                 `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents`,
                 {
                     documentId: 'unique()',
-                    data: {
-                        user_address: checksumAddress,
-                        positions_json: newPositionsJson
-                    }
+                    user_address: checksumAddress,
+                    positions_json: newPositionsJson
                 }
             );
             log(`Created new state record in DB with ID: ${createResponse.data.$id}`);
@@ -146,6 +142,7 @@ module.exports = async (context) => {
             error(`Response status: ${err.response.status}`);
             error(`Response data: ${JSON.stringify(err.response.data)}`);
         }
+        error(`Stack: ${err.stack}`);
         return res.send(err.message, 500);
     }
 };
