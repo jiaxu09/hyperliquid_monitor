@@ -1,125 +1,14 @@
-// index.js for Appwrite Function (Final, Corrected Version following Appwrite Docs)
+// index.js for Appwrite Function (Final, Corrected Version)
 
 const { Client, Databases, ID, Query } = require('node-appwrite');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
-const { ethers } = require('ethers');
+const { ethers } = require('ethers'); // 确保 ethers 被引入
 
-// Appwrite Function的入口函数 - 使用 context 并正确处理 res 对象
-module.exports = async (context) => {
-    const { res, log, error } = context;
-
-    // =========================================================================
-    // --- 环境变量配置 (在Appwrite Function设置中配置) ---
-    // =========================================================================
-    const TARGET_ADDRESS = process.env.TARGET_ADDRESS;
-    const SENDER_EMAIL = process.env.SENDER_EMAIL;
-    const APP_PASSWORD = process.env.APP_PASSWORD;
-    const RECEIVER_EMAIL = process.env.RECEIVER_EMAIL;
-    const APPWRITE_DATABASE_ID = process.env.APPWRITE_DATABASE_ID;
-    const APPWRITE_COLLECTION_ID = process.env.APPWRITE_COLLECTION_ID;
-    // =========================================================================
-
-    // --- 初始化Appwrite客户端 ---
-    const client = new Client()
-        .setEndpoint(process.env.APPWRITE_ENDPOINT)
-        .setProject(process.env.APPWRITE_PROJECT_ID)
-        .setKey(process.env.APPWRITE_API_KEY);
-    
-    const databases = new Databases(client);
-
-    // --- 核心逻辑 ---
-    try {
-        // 1. 验证并转换地址为校验和格式
-        const checksumAddress = ethers.getAddress(TARGET_ADDRESS);
-        log(`Monitoring checksum address: ${checksumAddress}`);
-
-        // 2. 从Appwrite DB获取上一次的仓位状态
-        let previousPositions = {};
-        let documentId = null;
-
-        const queryResponse = await databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            APPWRITE_COLLECTION_ID,
-            [Query.equal('user_address', checksumAddress)]
-        );
-
-        if (queryResponse.total > 0) {
-            const document = queryResponse.documents[0];
-            documentId = document.$id;
-            if (document.positions_json && document.positions_json.trim() !== '') {
-                previousPositions = JSON.parse(document.positions_json);
-            }
-            log('Successfully fetched previous state from DB.');
-        } else {
-            log('No previous state found for this address. Will create a new record.');
-        }
-
-        // 3. 从Hyperliquid API获取当前仓位状态
-        const apiResponse = await axios.post('https://api.hyperliquid.xyz/info', {
-            type: 'userState',
-            user: checksumAddress
-        });
-
-        const assetPositions = apiResponse.data.assetPositions;
-        const currentPositions = {};
-        if (assetPositions && assetPositions.length > 0) {
-            assetPositions.forEach(pos => {
-                if (pos.position && parseFloat(pos.position.szi) !== 0) {
-                    const coin = pos.position.coin;
-                    currentPositions[coin] = {
-                        szi: parseFloat(pos.position.szi),
-                        entryPx: parseFloat(pos.position.entryPx),
-                        liquidationPx: parseFloat(pos.position.liquidationPx),
-                        marginUsed: parseFloat(pos.position.marginUsed)
-                    };
-                }
-            });
-        }
-        log('Successfully fetched current state from Hyperliquid API.');
-
-        // 4. 比较新旧状态并发送通知
-        const notifications = comparePositions(previousPositions, currentPositions, checksumAddress);
-        if (notifications.length > 0) {
-            log(`Found ${notifications.length} position changes. Sending notifications...`);
-            const transporter = nodemailer.createTransport({
-                service: 'gmail',
-                auth: { user: SENDER_EMAIL, pass: APP_PASSWORD.replace(/\s/g, '') }
-            });
-            for (const notification of notifications) {
-                await sendEmailNotification(transporter, notification.subject, notification.htmlBody, SENDER_EMAIL, RECEIVER_EMAIL, log, error);
-            }
-        } else {
-            log('No position changes detected.');
-        }
-
-        // 5. 将当前状态保存回Appwrite DB
-        const newPositionsJson = JSON.stringify(currentPositions);
-        if (documentId) {
-            await databases.updateDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, documentId, {
-                positions_json: newPositionsJson
-            });
-            log('Updated existing state in DB.');
-        } else {
-            await databases.createDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, ID.unique(), {
-                user_address: checksumAddress,
-                positions_json: newPositionsJson
-            });
-            log('Created new state record in DB.');
-        }
-
-        log('Execution finished successfully.');
-        // --- FINAL FIX: Return an empty response to signal successful completion ---
-        return res.empty();
-
-    } catch (err) {
-        error(`Execution failed: ${err.message}`);
-        // --- FINAL FIX: Return an error response to signal failure ---
-        return res.send(`Execution failed: ${err.message}`, 500);
-    }
-};
-
-// --- 辅助函数 (保持不变) ---
+// ============================================================================
+// --- 辅助函数 ---
+// (这些函数保持不变，位于主函数外部)
+// ============================================================================
 
 function comparePositions(previous, current, address) {
     const notifications = [];
@@ -162,6 +51,9 @@ function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos 
             <li><strong>Change:</strong> ${change} ${coin}</li>
         `;
     }
+    
+    // 确保 liquidationPx 存在，如果不存在则显示 N/A
+    const liquidationPrice = pos.liquidationPx ? `$${pos.liquidationPx}` : 'N/A';
 
     const htmlBody = `
         <div style="font-family: sans-serif; line-height: 1.6;">
@@ -175,7 +67,7 @@ function formatEmailMessage(title, coin, pos, address, isClose = false, prevPos 
                 <li><strong>Current Size:</strong> ${size} ${coin}</li>
                 ${changeText}
                 <li><strong>Entry Price:</strong> $${pos.entryPx}</li>
-                <li><strong>Liquidation Price:</strong> $${pos.liquidationPx || 'N/A'}</li>
+                <li><strong>Liquidation Price:</strong> ${liquidationPrice}</li>
                 <li><strong>Margin Used:</strong> $${pos.marginUsed.toFixed(2)}</li>
             </ul>
             <hr>
@@ -199,3 +91,116 @@ async function sendEmailNotification(transporter, subject, htmlBody, sender, rec
         error(`Error sending email: ${err.message}`);
     }
 }
+
+// ============================================================================
+// --- Appwrite Function Entrypoint ---
+// ============================================================================
+module.exports = async (context) => {
+    const { res, log, error } = context;
+
+    // --- 1. 从环境变量加载配置 ---
+    const TARGET_ADDRESS = context.env.TARGET_ADDRESS;
+    const SENDER_EMAIL = context.env.SENDER_EMAIL;
+    const APP_PASSWORD = context.env.APP_PASSWORD;
+    const RECEIVER_EMAIL = context.env.RECEIVER_EMAIL;
+    const APPWRITE_DATABASE_ID = context.env.APPWRITE_DATABASE_ID;
+    const APPWRITE_COLLECTION_ID = context.env.APPWRITE_COLLECTION_ID;
+    const APPWRITE_ENDPOINT = context.env.APPWRITE_ENDPOINT;
+    const APPWRITE_PROJECT_ID = context.env.APPWRITE_PROJECT_ID;
+    const APPWRITE_API_KEY = context.env.APPWRITE_API_KEY;
+
+    // --- 2. 初始化Appwrite客户端 ---
+    const client = new Client()
+        .setEndpoint(APPWRITE_ENDPOINT)
+        .setProject(APPWRITE_PROJECT_ID)
+        .setKey(APPWRITE_API_KEY);
+    
+    const databases = new Databases(client);
+
+    // --- 3. 核心逻辑 ---
+    try {
+        if (!TARGET_ADDRESS) {
+            throw new Error("Environment variable TARGET_ADDRESS is not set.");
+        }
+
+        const checksumAddress = ethers.getAddress(TARGET_ADDRESS);
+        log(`Monitoring checksum address: ${checksumAddress}`);
+
+        let previousPositions = {};
+        let documentId = null;
+
+        const queryResponse = await databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            APPWRITE_COLLECTION_ID,
+            [Query.equal('user_address', checksumAddress)]
+        );
+
+        if (queryResponse.total > 0) {
+            const document = queryResponse.documents[0];
+            documentId = document.$id;
+            if (document.positions_json && document.positions_json.trim() !== '') {
+                previousPositions = JSON.parse(document.positions_json);
+            }
+            log('Successfully fetched previous state from DB.');
+        } else {
+            log('No previous state found for this address. Will create a new record.');
+        }
+
+        const apiResponse = await axios.post('https://api.hyperliquid.xyz/info', {
+            type: 'userState',
+            user: checksumAddress
+        });
+
+        const assetPositions = apiResponse.data.assetPositions;
+        const currentPositions = {};
+        if (assetPositions && assetPositions.length > 0) {
+            assetPositions.forEach(pos => {
+                if (pos.position && parseFloat(pos.position.szi) !== 0) {
+                    const coin = pos.position.coin;
+                    currentPositions[coin] = {
+                        szi: parseFloat(pos.position.szi),
+                        entryPx: parseFloat(pos.position.entryPx),
+                        liquidationPx: pos.position.liquidationPx ? parseFloat(pos.position.liquidationPx) : null,
+                        marginUsed: parseFloat(pos.position.marginUsed)
+                    };
+                }
+            });
+        }
+        log('Successfully fetched current state from Hyperliquid API.');
+
+        const notifications = comparePositions(previousPositions, currentPositions, checksumAddress);
+        if (notifications.length > 0) {
+            log(`Found ${notifications.length} position changes. Sending notifications...`);
+            const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: { user: SENDER_EMAIL, pass: APP_PASSWORD }
+            });
+            for (const notification of notifications) {
+                await sendEmailNotification(transporter, notification.subject, notification.htmlBody, SENDER_EMAIL, RECEIVER_EMAIL, log, error);
+            }
+        } else {
+            log('No position changes detected.');
+        }
+
+        const newPositionsJson = JSON.stringify(currentPositions);
+        if (documentId) {
+            await databases.updateDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, documentId, {
+                positions_json: newPositionsJson
+            });
+            log('Updated existing state in DB.');
+        } else {
+            await databases.createDocument(APPWRITE_DATABASE_ID, APPWRITE_COLLECTION_ID, ID.unique(), {
+                user_address: checksumAddress,
+                positions_json: newPositionsJson
+            });
+            log('Created new state record in DB.');
+        }
+
+        log('Execution finished successfully.');
+        return res.empty();
+
+    } catch (err) {
+        error(`Execution failed: ${err.stack}`); // 使用 err.stack 获取更详细的错误信息
+        return res.send(err.message, 500);
+    }
+};
