@@ -2,7 +2,7 @@
   "name": "hyperliquid-monitor-function",
   "version": "1.0.0",
   "description": "Monitors Hyperliquid positions and sends notifications.",
-  "main": "index.js",
+  "main": "monitor.js",
   "dependencies": {
     "node-appwrite": "^11.1.0",
     "axios": "^1.6.0",
