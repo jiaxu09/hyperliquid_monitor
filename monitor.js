@@ -1,4 +1,4 @@
-// index.js for Appwrite Function (Using REST API instead of SDK)
+// index.js for Appwrite Function (Fixed REST API calls)
 
 const axios = require('axios');
 const nodemailer = require('nodemailer');
@@ -21,7 +21,7 @@ module.exports = async (context) => {
     const APPWRITE_PROJECT_ID = '68f83a530002fd707c12';
     const APPWRITE_API_KEY = 'standard_7ed5da113991e48205f5b2b34825efc512795358d933080c96a22b5980a23ded1e49f7bb868cc0c68e1e74294213a99162e5fe1c55520c02741b52a2b67d48838fd33135566177ce3652daac8bfb1c01286c4f26d8e5daeab888b2cd050daa7313461b3b0974cc999a8dcca03aaddbfe1e35d784f81be0699fe6b9082690fa02';
 
-    // --- 2. Axios 实例用于 Appwrite API ---
+    // --- 2. Axios 实例 ---
     const appwriteClient = axios.create({
         baseURL: APPWRITE_ENDPOINT,
         headers: {
@@ -40,15 +40,13 @@ module.exports = async (context) => {
         let documentId = null;
 
         // ========================================================================
-        // [FIX] 使用 REST API 替代 SDK
+        // 获取现有文档
         // ========================================================================
         try {
-            // 获取所有文档
             const listResponse = await appwriteClient.get(
                 `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents`
             );
 
-            // 手动查找匹配的文档
             const document = listResponse.data.documents.find(
                 doc => doc.user_address === checksumAddress
             );
@@ -58,17 +56,17 @@ module.exports = async (context) => {
                 if (document.positions_json && document.positions_json.trim() !== '') {
                     previousPositions = JSON.parse(document.positions_json);
                 }
-                log('Successfully found and fetched previous state from DB.');
+                log(`Found existing document: ${documentId}`);
             } else {
-                log('No previous state found for this address. Will create a new record.');
+                log('No previous state found for this address.');
             }
         } catch (dbError) {
-            // 如果集合为空或其他错误，继续执行
             log(`DB fetch warning: ${dbError.message}`);
         }
-        // ========================================================================
 
+        // ========================================================================
         // 获取当前状态
+        // ========================================================================
         const apiResponse = await axios.post('https://api.hyperliquid.xyz/info', {
             type: 'userState',
             user: checksumAddress
@@ -91,7 +89,9 @@ module.exports = async (context) => {
         }
         log('Successfully fetched current state from Hyperliquid API.');
 
+        // ========================================================================
         // 比较并发送通知
+        // ========================================================================
         const notifications = comparePositions(previousPositions, currentPositions, checksumAddress);
         if (notifications.length > 0) {
             log(`Found ${notifications.length} position changes. Sending notifications...`);
@@ -106,20 +106,25 @@ module.exports = async (context) => {
             log('No position changes detected.');
         }
 
-        // 更新数据库
+        // ========================================================================
+        // 更新数据库 - 修复的部分
+        // ========================================================================
         const newPositionsJson = JSON.stringify(currentPositions);
+        
         if (documentId) {
-            // 更新现有文档
+            // 更新现有文档 - 字段直接在根级别
             await appwriteClient.patch(
                 `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents/${documentId}`,
                 {
-                    positions_json: newPositionsJson
+                    data: {
+                        positions_json: newPositionsJson
+                    }
                 }
             );
             log('Updated existing state in DB.');
         } else {
-            // 创建新文档
-            await appwriteClient.post(
+            // 创建新文档 - 修复格式
+            const createResponse = await appwriteClient.post(
                 `/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_COLLECTION_ID}/documents`,
                 {
                     documentId: 'unique()',
@@ -129,14 +134,18 @@ module.exports = async (context) => {
                     }
                 }
             );
-            log('Created new state record in DB.');
+            log(`Created new state record in DB with ID: ${createResponse.data.$id}`);
         }
 
         log('Execution finished successfully.');
-        return res.json({ success: true });
+        return res.json({ success: true, monitored_address: checksumAddress });
 
     } catch (err) {
-        error(`Execution failed: ${err.stack}`);
+        error(`Execution failed: ${err.message}`);
+        if (err.response) {
+            error(`Response status: ${err.response.status}`);
+            error(`Response data: ${JSON.stringify(err.response.data)}`);
+        }
         return res.send(err.message, 500);
     }
 };
